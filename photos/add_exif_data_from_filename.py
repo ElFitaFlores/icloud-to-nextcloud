@@ -5,53 +5,96 @@ import re
 from datetime import datetime
 
 
-def extract_date_from_filename(filename):
-    date_pattern = r'20\d{2}[-._]?(?:0[1-9]|1[0-2])[-._]?(?:0[1-9]|[12]\d|3[01])'
-    match = re.search(date_pattern, filename)
+def extract_datetime_from_filename(filename):
+    # Pattern:
+    # Group 1: Date (YYYYMMDD, YYYY-MM-DD, etc.) - Mandatory
+    # Optional non-capturing group (?:...)? for separator and time
+    #   Separator: anything (.*)
+    #   Group 2: Time (HHMMSS, HH.MM.SS, etc.) - Captured only if present
+    pattern = r"(\d{4}[-._]?\d{2}[-._]?\d{2})(?:.*(\d{2}[-._]?\d{2}[-._]?\d{2}))?"
+
+    match = re.search(pattern, filename)
     if match:
-        date_str = match.group()
-        date_str = re.sub(r'\D', '', date_str)
+        date_str = match.group(1)  # Always captured if pattern matches
+        time_str = match.group(2)  # Captured only if time part exists (otherwise None)
+
+        # Clean date string
+        cleaned_date_str = re.sub(r"\D", "", date_str)
+
+        if time_str:
+            # If time was found, clean it and parse date & time
+            cleaned_time_str = re.sub(r"\D", "", time_str)
+            # Ensure time string has 6 digits (HHMMSS)
+            cleaned_time_str = cleaned_time_str.ljust(6, "0")
+            datetime_str = cleaned_date_str + cleaned_time_str
+            try:
+                # Parse using the combined, cleaned format
+                return datetime.strptime(datetime_str, "%Y%m%d%H%M%S")
+            except ValueError:
+                print(
+                    "Error parsing combined date/time string: {}".format(datetime_str)
+                )
+                # Fallback to date only if combined parsing fails unexpectedly
+                pass  # Fall through to date-only parsing
+
+        # If time_str was None, or if combined parsing failed, parse date only
         try:
-            return datetime.strptime(date_str, "%Y%m%d")
+            return datetime.strptime(cleaned_date_str, "%Y%m%d")
         except ValueError:
-            return None
-    return None
+            print("Error parsing cleaned date string: {}".format(cleaned_date_str))
+            return None  # Invalid date format
 
 
-def process_images(directory, processed_dir=None, move=False, in_place=False, replace_old_metadata=False):
+def process_images(
+    directory,
+    processed_dir=None,
+    move=False,
+    in_place=False,
+    replace_old_metadata=False,
+):
     if not in_place and processed_dir:
         os.makedirs(processed_dir, exist_ok=True)
 
     stats = {
-        'total_files': 0,
-        'files_changed': 0,
-        'files_skipped_no_date': 0,
-        'files_skipped_existing_metadata': 0,
-        'files_metadata_replaced': 0,
-        'files_error': 0
+        "total_files": 0,
+        "files_changed": 0,
+        "files_skipped_no_date": 0,
+        "files_skipped_existing_metadata": 0,
+        "files_metadata_replaced": 0,
+        "files_error": 0,
     }
 
     for filename in os.listdir(directory):
-        stats['total_files'] += 1
+        stats["total_files"] += 1
         input_file = os.path.join(directory, filename)
-        output_file = os.path.join(processed_dir, filename) if not in_place else input_file
+        output_file = (
+            os.path.join(processed_dir, filename) if not in_place else input_file
+        )
 
         # Extract date from filename
-        date_obj = extract_date_from_filename(filename)
+        date_obj = extract_datetime_from_filename(filename)
         if not date_obj:
             print(f"Couldn't extract date from {filename}, skipping...")
-            stats['files_skipped_no_date'] += 1
+            stats["files_skipped_no_date"] += 1
             continue
 
         exif_date = date_obj.strftime("%Y:%m:%d 00:00:00")
 
         # Check if date metadata already exists
-        check_command = ["exiftool", "-CreateDate", "-DateTimeOriginal", "-s", "-s", "-s", input_file]
+        check_command = [
+            "exiftool",
+            "-CreateDate",
+            "-DateTimeOriginal",
+            "-s",
+            "-s",
+            "-s",
+            input_file,
+        ]
         result = subprocess.run(check_command, capture_output=True, text=True)
 
         if result.stdout.strip() and not replace_old_metadata:
             print(f"Skipping {filename}: Date metadata already exists")
-            stats['files_skipped_existing_metadata'] += 1
+            stats["files_skipped_existing_metadata"] += 1
             continue
 
         # Copy or move the file if not in-place
@@ -69,7 +112,7 @@ def process_images(directory, processed_dir=None, move=False, in_place=False, re
             "-overwrite_original",
             f"-CreateDate={exif_date}",
             f"-DateTimeOriginal={exif_date}",
-            output_file
+            output_file,
         ]
 
         # Run exiftool command
@@ -77,13 +120,13 @@ def process_images(directory, processed_dir=None, move=False, in_place=False, re
             subprocess.run(command, check=True, capture_output=True, text=True)
             if result.stdout.strip() and replace_old_metadata:
                 print(f"Replaced existing metadata for {filename}")
-                stats['files_metadata_replaced'] += 1
+                stats["files_metadata_replaced"] += 1
             else:
                 print(f"Successfully updated metadata for {filename}")
-                stats['files_changed'] += 1
+                stats["files_changed"] += 1
         except subprocess.CalledProcessError as e:
             print(f"Error processing {filename}: {e.stderr}")
-            stats['files_error'] += 1
+            stats["files_error"] += 1
 
     return stats
 
